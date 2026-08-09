@@ -34,13 +34,14 @@ class VMSupervisor:
             await self.stop_all()
 
     async def _spawn_vm(self):
+        # TODO ADD LIMIT
         queue = asyncio.Queue()
         vm_name = generate_name()
 
         while vm_name in self.vm_storage:
             vm_name = generate_name()
 
-        vm = VMEmulator(vm_name, queue, self._amqp_url)
+        vm = VMEmulator(vm_name, self._amqp_url)
 
         try:
             await vm.start()

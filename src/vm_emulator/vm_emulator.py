@@ -4,27 +4,27 @@ from dataclasses import asdict
 
 import aio_pika
 
+from src.mixins.hardware_config_mixin import HardwareConfigMixin
 from src.mixins.message_generator_mixin import MessageGeneratorMixin
-from src.model.rmq_message_type import RMQMessage, RMQMessagePayload
+from src.model.rmq_message_type import RMQMessage
 from src.utils.vm_emulator_utils import collect_handler, MessageHandlers
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-class VMEmulator(MessageGeneratorMixin):
+class VMEmulator(MessageGeneratorMixin, HardwareConfigMixin):
     message_handlers: MessageHandlers = {}
     MESSAGE_TYPE_STATUS = "status"
 
-    def __init__(self, identity: str, queue, amqp_url):
+    def __init__(self, identity: str, amqp_url):
         self.identity: str = identity
         self._life_cycle_task: asyncio.Task = None
-        self._command_task = None
-        self.event_queue = queue
         self.log_counter = 0
 
         self.command_router = self.message_handlers
 
+        self.hardware_config = self.get_config()
         self._amqp_url = amqp_url
         self.amqp_connection = None
         self.amqp_exchange = None
@@ -65,18 +65,24 @@ class VMEmulator(MessageGeneratorMixin):
 
     async def handle_message(self, message: aio_pika.IncomingMessage):
         async with message.process():
-            body = message.body.decode()
-            await self.send_message(RMQMessage("response", RMQMessagePayload(self.identity, {"message": "response"})))
-            print(body, self.identity, message.routing_key)
+            topic = message.routing_key.split(".")[-1].lower()
+            handler = self.command_router.get(topic)
+            correlation_id = message.correlation_id
+
+            if handler is None:
+                raise NotImplementedError(f"{topic} Not Implemented")
+
+            await handler(self, correlation_id, message.body.decode())
 
     async def send_message(self, message: RMQMessage):
         if self.amqp_exchange is None:
             raise RuntimeError("Publisher is not connected")
 
         payload = aio_pika.Message(
-            body=json.dumps(asdict(message.message), default=str).encode(),
+            body=json.dumps(message.message_payload, default=str).encode(),
             content_type="application/json",
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            correlation_id=message.correlation_id,
         )
 
         await self.amqp_exchange.publish(
@@ -86,10 +92,21 @@ class VMEmulator(MessageGeneratorMixin):
 
     async def _life_cycle(self):
         while True:
-            message_body = self._generate_message()
-            payload = RMQMessage(self.MESSAGE_TYPE_STATUS, RMQMessagePayload(self.identity, message_body))
-            asyncio.create_task(self.send_message(payload))
-            self.log_counter = self.log_counter + 1
+            try:
+                message_body = self._generate_message()
+                payload = RMQMessage(
+                    self.MESSAGE_TYPE_STATUS,
+                    self.identity,
+                    asdict(message_body)
+                )
+                self.log_counter += 1
+
+                await self.send_message(payload)
+
+            except Exception as e:
+                logger.error(f"{type(e).__name__}: {e}")
+                logger.exception("Lifecycle error")
+
             await asyncio.sleep(self._get_message_timeout())
 
     async def stop(self):
@@ -102,9 +119,33 @@ class VMEmulator(MessageGeneratorMixin):
 
 
     @collect_handler(message_handlers)
-    async def handle_ping(self):
-        pass
+    async def handle_get_hardware_config(self, correlation_id, *args):
+        payload = RMQMessage(
+            "HardwareConfig",
+            self.identity,
+            self.hardware_config,
+            correlation_id,
+        )
+
+        return await self.send_message(payload)
 
     @collect_handler(message_handlers)
-    async def handle_get_counter(self):
-        pass
+    async def handle_get_log_counter(self, correlation_id, *args):
+        payload = RMQMessage(
+            "LogCounter",
+            self.identity,
+            self.log_counter,
+            correlation_id,
+        )
+
+        return await self.send_message(payload)
+
+
+async def main():
+    emu = VMEmulator("test", 'amqp://guest:guest@localhost/')
+    await emu.start()
+
+    await asyncio.Event().wait()
+
+if __name__ == '__main__':
+    asyncio.run(main())

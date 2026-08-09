@@ -8,8 +8,6 @@ logger = logging.getLogger(__name__)
 
 
 class VMService:
-    SHUTDOWN_MESSAGE = object()
-
     def __init__(self, amqp_url):
         self.lock = asyncio.Lock()
         self._vm_supervisor: VMSupervisor = None
