@@ -10,9 +10,10 @@ logger = logging.getLogger(__name__)
 class VMService:
     SHUTDOWN_MESSAGE = object()
 
-    def __init__(self):
+    def __init__(self, amqp_url):
         self.lock = asyncio.Lock()
         self._vm_supervisor: VMSupervisor = None
+        self._amqp_url = amqp_url
 
     async def stop(self):
         if self._vm_supervisor is not None:
@@ -22,7 +23,7 @@ class VMService:
         if not self._vm_supervisor:
             async with self.lock:
                 if not self._vm_supervisor:
-                    self._vm_supervisor = VMSupervisor(vm_count)
+                    self._vm_supervisor = VMSupervisor(vm_count, self._amqp_url)
                     await self._vm_supervisor.start()
         else:
             raise HTTPException(status_code=500, detail="Error while starting supervisor")

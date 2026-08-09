@@ -17,9 +17,10 @@ class VMContext:
 class VMSupervisor:
     CREATE_EMULATOR_TIMEOUT = 1
 
-    def __init__(self, vm_count: int):
+    def __init__(self, vm_count: int, amqp_url):
         self.vm_count = vm_count
         self.vm_storage = {}
+        self._amqp_url = amqp_url
 
     def get_vms_list(self):
         result = [str(ctx.vm) for ctx in self.vm_storage.values()]
@@ -39,7 +40,7 @@ class VMSupervisor:
         while vm_name in self.vm_storage:
             vm_name = generate_name()
 
-        vm = VMEmulator(vm_name, queue)
+        vm = VMEmulator(vm_name, queue, self._amqp_url)
 
         try:
             await vm.start()
