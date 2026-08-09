@@ -1,6 +1,5 @@
 import asyncio
 import json
-import random
 from dataclasses import asdict
 
 import aio_pika
@@ -17,7 +16,7 @@ class VMEmulator(MessageGeneratorMixin):
     message_handlers: MessageHandlers = {}
     MESSAGE_TYPE_STATUS = "status"
 
-    def __init__(self, identity: str, queue):
+    def __init__(self, identity: str, queue, amqp_url):
         self.identity: str = identity
         self._life_cycle_task: asyncio.Task = None
         self._command_task = None
@@ -26,7 +25,7 @@ class VMEmulator(MessageGeneratorMixin):
 
         self.command_router = self.message_handlers
 
-        self.url = "amqp://guest:guest@localhost/"
+        self._amqp_url = amqp_url
         self.amqp_connection = None
         self.amqp_exchange = None
         self.amqp_queue = None
@@ -39,11 +38,10 @@ class VMEmulator(MessageGeneratorMixin):
     async def start(self):
         await self.connect_to_channel()
         self._life_cycle_task = asyncio.create_task(self._life_cycle())
-        self._command_task = asyncio.create_task(self._command_loop())
 
 
     async def connect_to_channel(self):
-        self.amqp_connection = await aio_pika.connect_robust(self.url)
+        self.amqp_connection = await aio_pika.connect_robust(self._amqp_url)
         self.amqp_channel = await self.amqp_connection.channel()
 
         self.amqp_exchange = await self.amqp_channel.declare_exchange(
@@ -101,12 +99,7 @@ class VMEmulator(MessageGeneratorMixin):
                 await self._life_cycle_task
             except asyncio.CancelledError:
                 pass
-        if self._command_task:
-            self._command_task.cancel()
-            try:
-                await self._command_task
-            except asyncio.CancelledError:
-                pass
+
 
     @collect_handler(message_handlers)
     async def handle_ping(self):
@@ -115,15 +108,3 @@ class VMEmulator(MessageGeneratorMixin):
     @collect_handler(message_handlers)
     async def handle_get_counter(self):
         pass
-
-
-async def main():
-    queue = asyncio.Queue()
-    emu = VMEmulator("test", queue)
-    await emu.start()
-
-    await asyncio.Event().wait()
-
-
-if __name__ == '__main__':
-    asyncio.run(main())
